@@ -1,30 +1,56 @@
 // src/services/job-api.ts
 import axios from 'axios';
 
-const API_BASE_URL = 'http://192.168.10.109:3000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: API_BASE_URL ,
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 10000, // 10 second timeout
 });
 
-// Response interceptor for error handling
+// Add request interceptor for debugging
+api.interceptors.request.use((config) => {
+  console.log(`API Request: ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
+  return config;
+}, (error) => {
+  console.error('API Request Error:', error);
+  return Promise.reject(error);
+});
+
+// Response interceptor for better error handling
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    console.log(`API Response: ${response.status} ${response.config.url}`);
+    return response;
+  },
   (error) => {
+    if (error.code === 'ECONNABORTED') {
+      console.error('API Timeout:', error.config?.url);
+      return Promise.reject(new Error('Request timeout. Please check your connection.'));
+    }
+    
     if (error.response) {
-      // Server responded with error
-      console.error('API Error:', error.response.data);
-      return Promise.reject(error.response.data);
+      // Server responded with error status
+      console.error('API Error Response:', {
+        status: error.response.status,
+        data: error.response.data,
+        url: error.config?.url,
+      });
+      
+      const message = error.response.data?.message || 
+                     error.response.data?.error || 
+                     `Server error: ${error.response.status}`;
+      return Promise.reject(new Error(message));
     } else if (error.request) {
       // No response received
-      console.error('Network Error:', error.request);
-      return Promise.reject({ message: 'Network error. Please check your connection.' });
+      console.error('API No Response:', error.request);
+      return Promise.reject(new Error('Network error. Please check if the server is running.'));
     } else {
       // Request setup error
-      console.error('Request Error:', error.message);
+      console.error('API Setup Error:', error.message);
       return Promise.reject(error);
     }
   }
@@ -95,8 +121,33 @@ export const jobApi = {
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
   }): Promise<JobsListResponse> => {
-    const response = await api.get<JobsListResponse>('/jobs', { params });
-    return response.data;
+    try {
+      const response = await api.get<JobsListResponse>('/jobs', { params });
+      
+      // Ensure response has the expected structure
+      if (!response.data.jobs) {
+        console.warn('API response missing jobs array:', response.data);
+        return {
+          jobs: [],
+          total: 0,
+          page: params?.page || 1,
+          limit: params?.limit || 10,
+          pages: 0,
+        };
+      }
+      
+      return response.data;
+    } catch (error) {
+      console.error('Failed to fetch jobs:', error);
+      // Return empty structure instead of throwing
+      return {
+        jobs: [],
+        total: 0,
+        page: params?.page || 1,
+        limit: params?.limit || 10,
+        pages: 0,
+      };
+    }
   },
 
   // Get single job by ID
@@ -119,8 +170,18 @@ export const jobApi = {
 
   // Get job statistics
   getJobStats: async (): Promise<JobStats> => {
-    const response = await api.get<JobStats>('/jobs/stats');
-    return response.data;
+    try {
+      const response = await api.get<JobStats>('/jobs/stats');
+      return response.data;
+    } catch (error) {
+      console.error('Failed to fetch stats:', error);
+      return {
+        total: 0,
+        byType: {},
+        byStatus: {},
+        byExperience: {},
+      };
+    }
   },
 
   // Increment applications count
@@ -131,14 +192,14 @@ export const jobApi = {
 
   // Search jobs
   searchJobs: async (query: string): Promise<JobResponse[]> => {
-    const response = await api.get<JobResponse[]>('/jobs/search', {
-      params: { q: query }
-    });
-    return response.data;
+    try {
+      const response = await api.get<JobResponse[]>('/jobs/search', {
+        params: { q: query }
+      });
+      return response.data || [];
+    } catch (error) {
+      console.error('Failed to search jobs:', error);
+      return [];
+    }
   },
-};
-
-// Hook for using job API
-export const useJobApi = () => {
-  return jobApi;
 };
